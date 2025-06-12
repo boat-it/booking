@@ -28,6 +28,21 @@ function book() {
         return;
     }
 
+    // Check for overlapping bookings
+    const hasOverlap = bookings.some(booking => {
+        const bookingStart = new Date(booking.start);
+        const bookingEnd = new Date(booking.end);
+        return booking.room === room && 
+               ((start >= bookingStart && start < bookingEnd) || 
+                (end > bookingStart && end <= bookingEnd) ||
+                (start <= bookingStart && end >= bookingEnd));
+    });
+
+    if (hasOverlap) {
+        Swal.fire({ icon: "error", text: "ช่วงเวลานี้มีการจองแล้ว กรุณาเลือกช่วงเวลาอื่น" });
+        return;
+    }
+
     ws.send(JSON.stringify({ type: "book", room, start: start.toISOString(), end: end.toISOString(), note, booker }));
 
     document.getElementById("room").value = "ห้องประชุม 1";
