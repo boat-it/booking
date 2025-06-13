@@ -32,8 +32,8 @@ function book() {
     const hasOverlap = bookings.some(booking => {
         const bookingStart = new Date(booking.start);
         const bookingEnd = new Date(booking.end);
-        return booking.room === room && 
-               ((start >= bookingStart && start < bookingEnd) || 
+        return booking.room === room &&
+            ((start >= bookingStart && start < bookingEnd) ||
                 (end > bookingStart && end <= bookingEnd) ||
                 (start <= bookingStart && end >= bookingEnd));
     });
@@ -43,43 +43,120 @@ function book() {
         return;
     }
 
+    // ส่งข้อมูลไปยัง server ผ่าน WebSocket
     ws.send(JSON.stringify({ type: "book", room, start: start.toISOString(), end: end.toISOString(), note, booker }));
 
+    // --- รีเซ็ตค่าฟอร์มหลังจองเสร็จ ---
     document.getElementById("room").value = "ห้องประชุม 1";
     document.getElementById("note").value = "";
     document.getElementById("booker").value = "";
     const today = new Date().toISOString().split("T")[0];
     document.getElementById("startDate").value = today;
+
+    // โหลดเวลาใหม่ทั้งหมด
     populateTimeDropdowns();
+    disableOverlappingTimes();
+
+    // ตั้งค่าเวลาที่ว่างเป็นค่า default
+    const startSel = document.getElementById("startTime");
+    const endSel = document.getElementById("endTime");
+    const nextAvailableStart = Array.from(startSel.options).find(o => !o.disabled);
+
+    if (nextAvailableStart) {
+        startSel.value = nextAvailableStart.value;
+        const nextAvailableEnd = Array.from(endSel.options).find(
+            o => !o.disabled && o.value > nextAvailableStart.value
+        );
+        endSel.value = nextAvailableEnd ? nextAvailableEnd.value : "";
+    } else {
+        startSel.value = "";
+        endSel.value = "";
+        Swal.fire({ icon: "info", text: "ไม่มีช่วงเวลาให้จองในวันนี้แล้ว" });
+    }
+
     adjustEndTime();
 }
 
+
 function adjustEndTime() {
-    const start = document.getElementById("startTime").value;
+    const startTime = document.getElementById("startTime").value;
     const endSel = document.getElementById("endTime");
-    const options = Array.from(endSel.options);
-    for (let opt of options) {
-        opt.disabled = opt.value <= start;
+    const startDate = document.getElementById("startDate").value;
+    const room = document.getElementById("room").value;
+
+    const startDateTime = new Date(`${startDate}T${startTime}`);
+    const endOptions = Array.from(endSel.options);
+
+    // เปิดทั้งหมดก่อน
+    endOptions.forEach(opt => opt.disabled = false);
+
+    // ดักเวลาที่อยู่ก่อน start หรือเกิน 17:00
+    endOptions.forEach(opt => {
+        if (opt.value <= startTime || opt.value > "17:00") {
+            opt.disabled = true;
+        }
+    });
+
+    // ดักเวลาสิ้นสุดที่ชนกับ bookings
+    const dayBookings = bookings.filter(b => b.room === room && b.start.startsWith(startDate));
+    for (let opt of endOptions) {
+        const testEndTime = new Date(`${startDate}T${opt.value}`);
+        for (let b of dayBookings) {
+            const bStart = new Date(b.start);
+            const bEnd = new Date(b.end);
+            if ((startDateTime < bEnd && testEndTime > bStart)) {
+                opt.disabled = true;
+                break;
+            }
+        }
     }
-    if (endSel.value <= start) {
-        const next = options.find((o) => o.value > start && !o.disabled);
-        if (next) endSel.value = next.value;
+
+    // แก้ค่า end ถ้า invalid
+    if (endSel.value <= startTime || endSel.options.namedItem(endSel.value)?.disabled) {
+        const next = endOptions.find(o => !o.disabled && o.value > startTime);
+        endSel.value = next ? next.value : "";
     }
 }
+
+
 
 function populateTimeDropdowns() {
     const startSel = document.getElementById("startTime");
     const endSel = document.getElementById("endTime");
-    const options = [];
-    for (let h = 8; h <= 17; h++) {
+
+    const startOptions = [];
+    const endOptions = [];
+
+    // start: 08:00 ถึง 16:30 เท่านั้น
+    for (let h = 8; h <= 16; h++) {
         for (let m of [0, 30]) {
+            // ถ้าเกิน 16:30 ไม่ต้องเพิ่ม
+            if (h === 16 && m > 30) continue;
+
             const hour = h.toString().padStart(2, "0");
             const min = m.toString().padStart(2, "0");
-            options.push(`${hour}:${min}`);
+            const time = `${hour}:${min}`;
+            startOptions.push(`<option value="${time}">${time}</option>`);
         }
     }
-    startSel.innerHTML = endSel.innerHTML = options.map(time => `<option value="${time}">${time}</option>`).join("");
+
+    // end: 08:30 ถึง 17:00
+    for (let h = 8; h <= 17; h++) {
+        for (let m of [0, 30]) {
+            if (h === 17 && m > 0) continue; // ไม่เกิน 17:00
+            const hour = h.toString().padStart(2, "0");
+            const min = m.toString().padStart(2, "0");
+            const time = `${hour}:${min}`;
+            endOptions.push(`<option value="${time}">${time}</option>`);
+        }
+    }
+
+    startSel.innerHTML = startOptions.join("");
+    endSel.innerHTML = endOptions.join("");
 }
+
+
+
 
 function openModal(event) {
     selectedBookingId = parseInt(event.id);
@@ -120,19 +197,123 @@ function cancelBooking() {
     closeModal();
 }
 
+function disableOverlappingTimes() {
+    const room = document.getElementById("room").value;
+    const date = document.getElementById("startDate").value;
+    const startSel = document.getElementById("startTime");
+    const endSel = document.getElementById("endTime");
+    const optionsStart = Array.from(startSel.options);
+    const optionsEnd = Array.from(endSel.options);
+
+    optionsStart.forEach(opt => opt.disabled = false);
+    optionsEnd.forEach(opt => opt.disabled = false);
+
+    const dayBookings = bookings.filter(b => {
+        return b.room === room && b.start.startsWith(date);
+    });
+
+    for (let booking of dayBookings) {
+        const bookingStart = new Date(booking.start);
+        const bookingEnd = new Date(booking.end);
+
+        const startStr = bookingStart.toTimeString().slice(0, 5);
+        const endStr = bookingEnd.toTimeString().slice(0, 5);
+
+        // Disable options ที่ overlap
+        optionsStart.forEach(opt => {
+            if (opt.value >= startStr && opt.value < endStr) {
+                opt.disabled = true;
+            }
+        });
+        optionsEnd.forEach(opt => {
+            if (opt.value > startStr && opt.value <= endStr) {
+                opt.disabled = true;
+            }
+        });
+    }
+
+    adjustEndTime(); // เช็คให้ endTime ยังถูกต้อง
+}
+
+
 ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     if (data.type === "init") {
         bookings = data.bookings;
         renderCalendar(true);
     } else if (data.type === "booked") {
+        // bookings.push(data.booking);
+        // renderCalendar();
+        // Swal.fire({ toast: true, icon: "success", title: "จองสำเร็จ", position: "top-end", showConfirmButton: false, timer: 2000 });
         bookings.push(data.booking);
         renderCalendar();
-        Swal.fire({ toast: true, icon: "success", title: "จองสำเร็จ", position: "top-end", showConfirmButton: false, timer: 2000 });
+
+        // รีโหลดเวลาใหม่ และ disable เวลาที่จองไปแล้ว
+        populateTimeDropdowns();
+        disableOverlappingTimes();
+
+        // เลือก default เวลาว่างหลัง booking ใหม่
+        const startSel = document.getElementById("startTime");
+        const endSel = document.getElementById("endTime");
+        const nextAvailableStart = Array.from(startSel.options).find(o => !o.disabled);
+
+        if (nextAvailableStart) {
+            startSel.value = nextAvailableStart.value;
+            const nextAvailableEnd = Array.from(endSel.options).find(
+                o => !o.disabled && o.value > nextAvailableStart.value
+            );
+            endSel.value = nextAvailableEnd ? nextAvailableEnd.value : "";
+        } else {
+            startSel.value = "";
+            endSel.value = "";
+            Swal.fire({ icon: "info", text: "ไม่มีช่วงเวลาให้จองในวันนี้แล้ว" });
+        }
+
+        adjustEndTime();
+
+        Swal.fire({
+            toast: true,
+            icon: "success",
+            title: "จองสำเร็จ",
+            position: "top-end",
+            showConfirmButton: false,
+            timer: 2000
+        });
     } else if (data.type === "cancelled") {
         bookings = bookings.filter((b) => b.id !== data.id);
         renderCalendar();
-        Swal.fire({ toast: true, icon: "info", title: "ยกเลิกสำเร็จ", position: "top-end", showConfirmButton: false, timer: 2000 });
+
+        // รีโหลด dropdown ใหม่ + disable เวลาซ้ำ
+        populateTimeDropdowns();
+        disableOverlappingTimes();
+
+        // เซ็ตเวลาว่างใหม่เป็น default
+        const startSel = document.getElementById("startTime");
+        const endSel = document.getElementById("endTime");
+        const nextAvailableStart = Array.from(startSel.options).find(o => !o.disabled);
+
+        if (nextAvailableStart) {
+            startSel.value = nextAvailableStart.value;
+            const nextAvailableEnd = Array.from(endSel.options).find(
+                o => !o.disabled && o.value > nextAvailableStart.value
+            );
+            endSel.value = nextAvailableEnd ? nextAvailableEnd.value : "";
+        } else {
+            startSel.value = "";
+            endSel.value = "";
+            Swal.fire({ icon: "info", text: "ไม่มีช่วงเวลาให้จองในวันนี้แล้ว" });
+        }
+
+        adjustEndTime();
+
+        Swal.fire({
+            toast: true,
+            icon: "info",
+            title: "ยกเลิกสำเร็จ",
+            position: "top-end",
+            showConfirmButton: false,
+            timer: 2000
+        });
     } else if (data.type === "error") {
         Swal.fire({ toast: true, icon: "error", title: data.message, position: "top-end", showConfirmButton: false, timer: 2500 });
     }
@@ -197,7 +378,56 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("startDate").value = today;
     document.getElementById("startDate").min = today;
     populateTimeDropdowns();
+    disableOverlappingTimes();
+    // adjustEndTime();
+});
+
+document.getElementById("startDate").addEventListener("change", () => {
+    populateTimeDropdowns();
+    disableOverlappingTimes();
+
+    const startSel = document.getElementById("startTime");
+    const endSel = document.getElementById("endTime");
+    const nextAvailableStart = Array.from(startSel.options).find(o => !o.disabled);
+
+    if (nextAvailableStart) {
+        startSel.value = nextAvailableStart.value;
+        const nextAvailableEnd = Array.from(endSel.options).find(
+            o => !o.disabled && o.value > nextAvailableStart.value
+        );
+        endSel.value = nextAvailableEnd ? nextAvailableEnd.value : "";
+    } else {
+        startSel.value = "";
+        endSel.value = "";
+        Swal.fire({ icon: "info", text: "ไม่มีช่วงเวลาให้จองในวันนี้สำหรับห้องนี้แล้ว" });
+    }
+
     adjustEndTime();
 });
 
-Object.assign(window, { book, cancelBooking, adjustEndTime, openModal, closeModal });
+
+document.getElementById("room").addEventListener("change", () => {
+    populateTimeDropdowns();
+    disableOverlappingTimes();
+
+    // เซ็ตเวลา default ใหม่
+    const startSel = document.getElementById("startTime");
+    const endSel = document.getElementById("endTime");
+    const nextAvailableStart = Array.from(startSel.options).find(o => !o.disabled);
+
+    if (nextAvailableStart) {
+        startSel.value = nextAvailableStart.value;
+        const nextAvailableEnd = Array.from(endSel.options).find(
+            o => !o.disabled && o.value > nextAvailableStart.value
+        );
+        endSel.value = nextAvailableEnd ? nextAvailableEnd.value : "";
+    } else {
+        startSel.value = "";
+        endSel.value = "";
+        Swal.fire({ icon: "info", text: "ไม่มีช่วงเวลาให้จองในวันนี้สำหรับห้องนี้แล้ว" });
+    }
+
+    adjustEndTime();
+});
+
+Object.assign(window, { book, cancelBooking, adjustEndTime, openModal, closeModal, disableOverlappingTimes });
