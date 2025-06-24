@@ -60,9 +60,6 @@ wss.on('connection', function connection(ws) {
 // ✅ เสิร์ฟ static page ที่ path /meeting
 app.use('/meeting', express.static('public'));
 
-router.get('/GG', (req, res) => {
-    res.sendFile(__dirname + '/public/index.html');
-});
 
 server.listen(3000, () => {
     console.log('✅ Server is running at http://localhost:3000');
